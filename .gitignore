@@ -1,0 +1,14 @@
+.venv/
+.env
+.env.*
+!.env.example
+__pycache__/
+.pytest_cache/
+*.pyc
+*.db
+*.db-*
+*.backup-*
+*.health.json*
+*.lock
+backups/
+.DS_Store

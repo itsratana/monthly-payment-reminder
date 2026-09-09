@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily payment reminder backups
+
+[Timer]
+OnCalendar=*-*-* 02:00:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+Unit=payment-reminder-backup.service
+
+[Install]
+WantedBy=timers.target

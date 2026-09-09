@@ -1,0 +1,15 @@
+[Unit]
+Description=Check payment reminder application and backup health
+
+[Service]
+Type=oneshot
+User=paymentbot
+Group=paymentbot
+WorkingDirectory=/opt/payment-reminder
+EnvironmentFile=/etc/payment-reminder.env
+ExecStart=/opt/payment-reminder/.venv/bin/python -m ops health --notify
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/payment-reminder

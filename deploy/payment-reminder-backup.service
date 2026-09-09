@@ -1,0 +1,15 @@
+[Unit]
+Description=Consistent payment reminder backup
+
+[Service]
+Type=oneshot
+User=paymentbot
+Group=paymentbot
+WorkingDirectory=/opt/payment-reminder
+EnvironmentFile=/etc/payment-reminder.env
+ExecStart=/opt/payment-reminder/.venv/bin/python -m ops backup --directory /var/backups/payment-reminder
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/payment-reminder /var/backups/payment-reminder
