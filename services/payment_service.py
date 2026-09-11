@@ -9,11 +9,13 @@ from database.payment_repository import (
     get_payment_chat_id,
     get_due_payments,
     get_active_payments,
+    get_payment_reminder_times,
+    add_payment_reminder_time,
+    remove_payment_reminder_time,
 )
 
 
 def save_payment(data):
-
     payment_id = create_payment(
         chat_id=data["chat_id"],
         name=data["payment_name"],
@@ -22,6 +24,17 @@ def save_payment(data):
         due_day=data["due_day"],
         reminder_time=data["reminder_time"]
     )
+    # Every new payment starts with its original reminder time
+    # as reminder slot #1.
+    result = add_payment_reminder_time(
+        payment_id,
+        data["reminder_time"]
+    )
+
+    if result not in ("added", "exists"):
+        raise RuntimeError(
+            "Payment was created but its reminder time could not be saved."
+        )
 
     return payment_id
 
@@ -30,6 +43,43 @@ def get_group_payments(chat_id: int):
 
 def get_payment_detail(payment_id: int):
     return get_payment(payment_id)
+
+def get_reminder_times(payment_id: int):
+    rows = get_payment_reminder_times(payment_id)
+
+    return [
+        row["reminder_time"]
+        for row in rows
+    ]
+
+
+def add_reminder_time(
+    payment_id: int,
+    text: str
+):
+    from utils.validators import VALIDATORS
+
+    reminder_time = VALIDATORS["reminder_time"](text)
+
+    if reminder_time is None:
+        raise ValueError(
+            "Invalid reminder time. Use HH:MM, for example 09:00 or 18:30."
+        )
+
+    return add_payment_reminder_time(
+        payment_id,
+        reminder_time
+    )
+
+
+def remove_reminder_time(
+    payment_id: int,
+    reminder_time: str
+):
+    return remove_payment_reminder_time(
+        payment_id,
+        reminder_time
+    )
 
 def get_selected_members(payment_id: int):
     return get_payment_members(payment_id)
@@ -60,7 +110,12 @@ def get_all_active_payments():
 def edit_payment(payment_id, chat_id, field, text):
     from utils.validators import VALIDATORS
     from database.payment_repository import update_payment
-    if field not in {'name', 'amount', 'currency', 'due_day', 'reminder_time'}:
+    if field not in {
+        'name',
+        'amount',
+        'currency',
+        'due_day',
+    }:
         raise ValueError('Unknown payment field')
     value = VALIDATORS[field](text)
     if value is None:

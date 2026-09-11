@@ -68,6 +68,298 @@ async def reports(callback):
     await show(callback,f'🏠 {group_title(chat_id)}\n📈 {datetime(year,month,1):%B %Y}\nRecorded cycle status; names shown are current. No historical amounts or month-end timing is inferred.'+('' if rows else '\nNo recorded history.'),
                buttons+nav+[('⬅️ Dashboard',f'group:{chat_id}')])
 
+@router.callback_query(F.data.startswith('payment_status_view:'))
+async def payment_status_view(callback):
+    payment_id = int(
+        callback.data.split(':')[1]
+    )
+
+    p = await require_payment_admin(
+        callback.bot,
+        callback.from_user.id,
+        payment_id
+    )
+
+    await callback.answer()
+
+    now = group_now(
+        p['chat_id']
+    )
+
+    rows, nav = page_items(
+        cycle_members(
+            payment_id,
+            now.year,
+            now.month,
+            current=True
+        ),
+        0,
+        f'payment_status_page:{payment_id}:{now.year}:{now.month}'
+    )
+
+    text = (
+        f"🏠 {group_title(p['chat_id'])}\n"
+        f"💳 {p['name']}\n"
+        f"📊 {now:%B %Y}\n\n"
+    )
+
+    if rows:
+        text += '\n'.join(
+            f"{'✅ Paid' if row['paid'] else '⏳ Pending'}"
+            f" • {name(row)}"
+            for row in rows
+        )
+    else:
+        text += 'No members assigned.'
+
+    buttons = []
+
+    if p['active']:
+        buttons += [
+            (
+                (
+                    f"↩️ Mark Unpaid"
+                    if row['paid']
+                    else "✅ Mark Paid"
+                )
+                + f" • {name(row)}",
+                (
+                    f"payment_correct:"
+                    f"{payment_id}:"
+                    f"{row['user_id']}:"
+                    f"{now.year}:"
+                    f"{now.month}:"
+                    f"{0 if row['paid'] else 1}"
+                )
+            )
+            for row in rows
+        ]
+
+    buttons += nav
+
+    buttons.append(
+        ('⬅️ Back to Payment', f"payment:{payment_id}")
+    )
+
+    await show(
+        callback,
+        text,
+        buttons
+    )
+
+@router.callback_query(F.data.startswith('payment_status_page:'))
+async def payment_status_page(callback):
+    _, payment_id, year, month, page = (
+        callback.data.split(':')
+    )
+
+    payment_id = int(payment_id)
+    year = int(year)
+    month = int(month)
+    page = int(page)
+
+    p = await require_payment_admin(
+        callback.bot,
+        callback.from_user.id,
+        payment_id
+    )
+
+    await callback.answer()
+
+    now = group_now(
+        p['chat_id']
+    )
+
+    if (year, month) != (
+        now.year,
+        now.month
+    ):
+        raise ValueError(
+            'Screen expired. Open Status again.'
+        )
+
+    rows, nav = page_items(
+        cycle_members(
+            payment_id,
+            year,
+            month,
+            current=True
+        ),
+        page,
+        f'payment_status_page:{payment_id}:{year}:{month}'
+    )
+
+    text = (
+        f"🏠 {group_title(p['chat_id'])}\n"
+        f"💳 {p['name']}\n"
+        f"📊 {now:%B %Y}\n\n"
+    )
+
+    if rows:
+        text += '\n'.join(
+            f"{'✅ Paid' if row['paid'] else '⏳ Pending'}"
+            f" • {name(row)}"
+            for row in rows
+        )
+    else:
+        text += 'No members assigned.'
+
+    buttons = []
+
+    if p['active']:
+        buttons += [
+            (
+                (
+                    f"↩️ Mark Unpaid"
+                    if row['paid']
+                    else "✅ Mark Paid"
+                )
+                + f" • {name(row)}",
+                (
+                    f"payment_correct:"
+                    f"{payment_id}:"
+                    f"{row['user_id']}:"
+                    f"{year}:"
+                    f"{month}:"
+                    f"{0 if row['paid'] else 1}"
+                )
+            )
+            for row in rows
+        ]
+
+    buttons += nav
+
+    buttons.append(
+        ('⬅️ Back to Payment', f"payment:{payment_id}")
+    )
+
+    await show(
+        callback,
+        text,
+        buttons
+    )
+
+@router.callback_query(F.data.startswith('payment_correct:'))
+async def payment_correct(callback):
+    (
+        _,
+        payment_id,
+        user_id,
+        year,
+        month,
+        paid
+    ) = callback.data.split(':')
+
+    payment_id = int(payment_id)
+    user_id = int(user_id)
+    year = int(year)
+    month = int(month)
+    paid = int(paid)
+
+    if paid not in (0, 1):
+        raise ValueError('Invalid status')
+
+    from services.payment_locks import payment_lock
+
+    async with payment_lock(payment_id):
+        p = await require_payment_admin(
+            callback.bot,
+            callback.from_user.id,
+            payment_id
+        )
+
+        changed = correct_current_status(
+            payment_id,
+            user_id,
+            year,
+            month,
+            paid,
+            callback.from_user.id
+        )
+
+        await callback.answer(
+            '✅ Saved'
+            if changed
+            else 'Already recorded'
+        )
+
+        await refresh_reminders(
+            callback.bot,
+            payment_id,
+            year,
+            month
+        )
+
+    now = group_now(p['chat_id'])
+
+    rows, nav = page_items(
+        cycle_members(
+            payment_id,
+            now.year,
+            now.month,
+            current=True
+        ),
+        0,
+        f'payment_status_page:{payment_id}:{now.year}:{now.month}'
+    )
+
+    text = (
+        f"🏠 {group_title(p['chat_id'])}\n"
+        f"💳 {p['name']}\n"
+        f"📊 {now:%B %Y}\n\n"
+    )
+
+    if rows:
+        text += '\n'.join(
+            f"{'✅ Paid' if row['paid'] else '⏳ Pending'}"
+            f" • {name(row)}"
+            for row in rows
+        )
+    else:
+        text += 'No members assigned.'
+
+    buttons = []
+
+    if p['active']:
+        buttons += [
+            (
+                (
+                    '↩️ Mark Unpaid'
+                    if row['paid']
+                    else '✅ Mark Paid'
+                )
+                + f" • {name(row)}",
+                (
+                    f"payment_correct:"
+                    f"{payment_id}:"
+                    f"{row['user_id']}:"
+                    f"{now.year}:"
+                    f"{now.month}:"
+                    f"{0 if row['paid'] else 1}"
+                )
+            )
+            for row in rows
+        ]
+
+    buttons += nav
+
+    buttons.append(
+        ('⬅️ Back to Payment', f'payment:{payment_id}')
+    )
+
+    await show(
+        callback,
+        text,
+        buttons
+    )
+    # Re-open the payment-specific status screen.
+    callback.data = (
+        f'payment_status_view:{payment_id}'
+    )
+
+    await payment_status_view(
+        callback
+    )
 
 @router.callback_query(F.data.startswith('cycle:'))
 async def cycle(callback):

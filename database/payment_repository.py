@@ -50,6 +50,147 @@ def get_payment(payment_id: int):
             WHERE id = ?
         """, (payment_id,)).fetchone()
 
+def get_payment_reminder_times(payment_id: int):
+    with db_connection() as conn:
+        return conn.execute("""
+            SELECT reminder_time
+            FROM payment_reminder_times
+            WHERE payment_id = ?
+            ORDER BY reminder_time
+        """, (payment_id,)).fetchall()
+
+
+def add_payment_reminder_time(
+    payment_id: int,
+    reminder_time: str
+):
+    with db_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+
+        payment = conn.execute("""
+            SELECT id
+            FROM payments
+            WHERE id = ?
+        """, (payment_id,)).fetchone()
+
+        if payment is None:
+            return "missing"
+
+        existing = conn.execute("""
+            SELECT 1
+            FROM payment_reminder_times
+            WHERE payment_id = ?
+              AND reminder_time = ?
+        """, (
+            payment_id,
+            reminder_time
+        )).fetchone()
+
+        if existing:
+            return "exists"
+
+        count = conn.execute("""
+            SELECT COUNT(*) AS total
+            FROM payment_reminder_times
+            WHERE payment_id = ?
+        """, (payment_id,)).fetchone()["total"]
+
+        if count >= 3:
+            return "limit"
+
+        conn.execute("""
+            INSERT INTO payment_reminder_times (
+                payment_id,
+                reminder_time
+            )
+            VALUES (?, ?)
+        """, (
+            payment_id,
+            reminder_time
+        ))
+
+        # Keep the old payments.reminder_time column synced for
+        # backwards compatibility while we transition the bot.
+        first_time = conn.execute("""
+            SELECT reminder_time
+            FROM payment_reminder_times
+            WHERE payment_id = ?
+            ORDER BY reminder_time
+            LIMIT 1
+        """, (payment_id,)).fetchone()
+
+        if first_time:
+            conn.execute("""
+                UPDATE payments
+                SET reminder_time = ?
+                WHERE id = ?
+            """, (
+                first_time["reminder_time"],
+                payment_id
+            ))
+
+        return "added"
+
+
+def remove_payment_reminder_time(
+    payment_id: int,
+    reminder_time: str
+):
+    with db_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+
+        rows = conn.execute("""
+            SELECT reminder_time
+            FROM payment_reminder_times
+            WHERE payment_id = ?
+            ORDER BY reminder_time
+        """, (payment_id,)).fetchall()
+
+        if not rows:
+            return "missing"
+
+        times = [
+            row["reminder_time"]
+            for row in rows
+        ]
+
+        if reminder_time not in times:
+            return "missing"
+
+        # Every active payment must always keep at least one
+        # automatic reminder time.
+        if len(times) <= 1:
+            return "last"
+
+        conn.execute("""
+            DELETE FROM payment_reminder_times
+            WHERE payment_id = ?
+              AND reminder_time = ?
+        """, (
+            payment_id,
+            reminder_time
+        ))
+
+        first_time = conn.execute("""
+            SELECT reminder_time
+            FROM payment_reminder_times
+            WHERE payment_id = ?
+            ORDER BY reminder_time
+            LIMIT 1
+        """, (payment_id,)).fetchone()
+
+        if first_time:
+            conn.execute("""
+                UPDATE payments
+                SET reminder_time = ?
+                WHERE id = ?
+            """, (
+                first_time["reminder_time"],
+                payment_id
+            ))
+
+        return "removed"
+
 
 def get_payment_members(payment_id: int):
     with db_connection() as conn:

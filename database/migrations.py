@@ -128,15 +128,166 @@ MIGRATIONS.append((3,'durable delivery attempts and multipart messages',_migrati
 
 
 def _migration_0004_group_onboarding(conn):
-    conn.execute("""
-        ALTER TABLE groups
-        ADD COLUMN onboarding_posted INTEGER NOT NULL DEFAULT 0
-    """)
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(groups)").fetchall()
+    }
+
+    if "onboarding_posted" not in columns:
+        conn.execute("""
+            ALTER TABLE groups
+            ADD COLUMN onboarding_posted INTEGER NOT NULL DEFAULT 0
+        """)
 
 
 MIGRATIONS.append((
     4,
     'track whether group onboarding button was posted',
     _migration_0004_group_onboarding,
+    False
+))
+
+
+def _migration_0005_multiple_reminder_times(conn):
+    # ---------------------------------------------------------
+    # Reminder times configured for each payment.
+    #
+    # Existing payments are automatically migrated from the
+    # old payments.reminder_time column.
+    # ---------------------------------------------------------
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS payment_reminder_times (
+            payment_id INTEGER NOT NULL,
+            reminder_time TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+            PRIMARY KEY (payment_id, reminder_time),
+
+            FOREIGN KEY (payment_id)
+                REFERENCES payments(id)
+                ON DELETE CASCADE
+        )
+    """)
+
+    # Preserve the current reminder time of every existing payment.
+    conn.execute("""
+        INSERT OR IGNORE INTO payment_reminder_times (
+            payment_id,
+            reminder_time
+        )
+        SELECT
+            id,
+            reminder_time
+        FROM payments
+        WHERE reminder_time IS NOT NULL
+          AND reminder_time != ''
+    """)
+
+    # ---------------------------------------------------------
+    # Automatic reminder duplicate protection.
+    #
+    # Unlike the old reminder_dispatches table, this allows:
+    #
+    # payment 1
+    # 2026-09-15
+    # 09:00
+    #
+    # AND
+    #
+    # payment 1
+    # 2026-09-15
+    # 18:00
+    #
+    # while still preventing each slot from being sent twice.
+    # ---------------------------------------------------------
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS reminder_slot_dispatches (
+            payment_id INTEGER NOT NULL,
+            year INTEGER NOT NULL,
+            month INTEGER NOT NULL
+                CHECK (month BETWEEN 1 AND 12),
+            local_date TEXT NOT NULL,
+            reminder_time TEXT NOT NULL,
+            chat_id INTEGER NOT NULL,
+            message_id INTEGER,
+            sent_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+            PRIMARY KEY (
+                payment_id,
+                local_date,
+                reminder_time
+            )
+        )
+    """)
+
+    # ---------------------------------------------------------
+    # Retry / delivery protection for each automatic slot.
+    # ---------------------------------------------------------
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS reminder_slot_attempts (
+            payment_id INTEGER NOT NULL,
+            local_date TEXT NOT NULL,
+            reminder_time TEXT NOT NULL,
+            state TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 1,
+            retry_after REAL NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+            PRIMARY KEY (
+                payment_id,
+                local_date,
+                reminder_time
+            )
+        )
+    """)
+
+    # ---------------------------------------------------------
+    # Tracks the messages belonging to one reminder send.
+    #
+    # batch_key will later distinguish:
+    #
+    # auto:09:00
+    # auto:18:00
+    # manual:<unique id>
+    #
+    # This means manual reminders do NOT interfere with
+    # automatic reminder duplicate protection.
+    # ---------------------------------------------------------
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS reminder_message_batches (
+            payment_id INTEGER NOT NULL,
+            year INTEGER NOT NULL,
+            month INTEGER NOT NULL
+                CHECK (month BETWEEN 1 AND 12),
+            local_date TEXT NOT NULL,
+            batch_key TEXT NOT NULL,
+            chat_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            sent_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+            PRIMARY KEY (chat_id, message_id)
+        )
+    """)
+
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS payment_reminder_times_payment_idx
+        ON payment_reminder_times(payment_id)
+    """)
+
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS reminder_message_batches_period_idx
+        ON reminder_message_batches(
+            payment_id,
+            year,
+            month,
+            sent_at
+        )
+    """)
+
+
+MIGRATIONS.append((
+    5,
+    'multiple reminder times and reminder message batches',
+    _migration_0005_multiple_reminder_times,
     False
 ))
