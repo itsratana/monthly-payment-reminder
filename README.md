@@ -76,7 +76,7 @@ monthly-payment-reminder/
 ## 1. Clone the Repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/monthly-payment-reminder.git
+git clone https://github.com/itsratana/monthly-payment-reminder.git
 cd monthly-payment-reminder
 ```
 
